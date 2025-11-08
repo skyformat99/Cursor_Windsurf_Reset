@@ -14,7 +14,7 @@ Don't fork this repository and only change README.MD file to sell to others for 
 ## ✨ Features
 
 ### 🎯 Core Features
-- **Latest Version Support**: Cursor 1.2.1, Windsurf 1.10.7
+- **Latest Version Support**: Cursor 1.7, Windsurf 1.12
 - **Smart Reset**: Automatically detects and resets device IDs, session data, and cache for Cursor and Windsurf
 - **Dual Interface Support**: Provides modern graphical interface and full-featured command-line interface
 - **Cross-Platform Compatibility**: Supports Windows, macOS, and Linux systems
