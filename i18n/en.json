@@ -493,5 +493,14 @@
   },
   "LogDisclaimer": {
     "other": "Disclaimer: This software is for educational, learning, and evaluation purposes only. It must not be used for any commercial/illegal purposes, and the developer assumes no legal liability."
+  },
+  "ResettingRegistry": {
+    "other": "Cleaning Windows registry"
+  },
+  "StartingRegistryCleaning": {
+    "other": "Starting registry cleaning"
+  },
+  "RegistryCleaningComplete": {
+    "other": "Registry cleaning complete (Cleaned: {{.Cleaned}}/{{.Total}}, Failed: {{.Failed}}, Deleted paths: {{.Deleted}})"
   }
-} 
+}

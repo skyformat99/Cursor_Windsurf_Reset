@@ -271,6 +271,21 @@ func (e *Engine) createDirectoryBackup(sourcePath, backupPath string) (string, e
 }
 
 func (e *Engine) CleanApplication(ctx context.Context, appName string) error {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().
+				Interface("panic", r).
+				Str("app", appName).
+				Msg("清理过程发生panic")
+			e.sendProgress(ProgressUpdate{
+				Type:     "error",
+				Message:  fmt.Sprintf("清理过程发生错误: %v", r),
+				AppName:  appName,
+				Progress: 0,
+			})
+		}
+	}()
+
 	e.sendProgress(ProgressUpdate{
 		Type:     "start",
 		Message:  e.localizer.MustLocalize(&i18n.LocalizeConfig{MessageID: "StartReset", TemplateData: map[string]interface{}{"AppName": appName}}),
@@ -350,7 +365,7 @@ func (e *Engine) CleanApplication(ctx context.Context, appName string) error {
 			Phase:    "registry",
 			Progress: 70,
 		})
-		
+
 		if err := e.cleanRegistry(appName); err != nil {
 			log.Error().Err(err).Str("app", appName).Msg("Failed to clean registry")
 		}
@@ -503,10 +518,10 @@ func (e *Engine) processSQLiteFile(dbPath string, telemetryKeys, sessionKeys []s
 			log.Debug().Str("connection", connStr).Err(err).Msg("Failed to open database connection")
 			continue
 		}
-		defer db.Close()
 
 		// 检查数据库连接
 		if err := db.Ping(); err != nil {
+			db.Close()
 			log.Debug().Str("connection", connStr).Err(err).Msg("Failed to ping database")
 			continue
 		}
@@ -516,11 +531,13 @@ func (e *Engine) processSQLiteFile(dbPath string, telemetryKeys, sessionKeys []s
 		// 查找ItemTable或类似表
 		tables, err := e.findRelevantTables(db)
 		if err != nil {
+			db.Close()
 			log.Error().Err(err).Msg("Failed to find relevant tables")
 			continue
 		}
 
 		if len(tables) == 0 {
+			db.Close()
 			log.Warn().Msg("No processable tables found in database")
 			return false, 0, 0, true // 没有表不算失败
 		}
@@ -528,6 +545,7 @@ func (e *Engine) processSQLiteFile(dbPath string, telemetryKeys, sessionKeys []s
 		// 开始事务
 		tx, err := db.Begin()
 		if err != nil {
+			db.Close()
 			log.Error().Err(err).Msg("Failed to begin transaction")
 			continue
 		}

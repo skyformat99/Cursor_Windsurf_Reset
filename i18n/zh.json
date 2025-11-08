@@ -481,5 +481,14 @@
   },
   "disclaimer": {
     "other": "本软件及其相关文档仅用于教育、学习与评估目的，不可用于任何商业/非法用途，开发者不承担一切法律责任。"
+  },
+  "ResettingRegistry": {
+    "other": "正在清理注册表"
+  },
+  "StartingRegistryCleaning": {
+    "other": "开始清理注册表"
+  },
+  "RegistryCleaningComplete": {
+    "other": "注册表清理完成 (已清理: {{.Cleaned}}/{{.Total}}, 失败: {{.Failed}}, 删除路径: {{.Deleted}})"
   }
 }

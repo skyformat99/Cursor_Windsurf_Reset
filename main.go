@@ -111,6 +111,15 @@ func main() {
 
 func runCLI(engine *cleaner.Engine, cfg *config.Config,
 	discover *bool, clean *string, cleanAll *bool, noConfirm *bool, dryRun *bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().
+				Interface("panic", r).
+				Msg("程序发生panic，已自动恢复")
+			fmt.Printf("\n❌ 程序发生了未预期的错误: %v\n", r)
+			fmt.Println("如果问题持续存在，请尝试以管理员权限运行")
+		}
+	}()
 
 	fmt.Printf("🧹 Cursor & Windsurf Data Cleaner %s (Go)\n", version)
 	fmt.Println(strings.Repeat("=", 55))
