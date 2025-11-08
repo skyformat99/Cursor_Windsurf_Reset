@@ -5,12 +5,15 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 
 	"Cursor_Windsurf_Reset/cleaner"
 	"Cursor_Windsurf_Reset/config"
 	"Cursor_Windsurf_Reset/gui"
 	appi18n "Cursor_Windsurf_Reset/i18n"
+	"Cursor_Windsurf_Reset/utils"
+
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -19,24 +22,32 @@ import (
 var version = "dev"
 
 func main() {
+	// On Windows, check if we're running as admin and elevate if needed
+	if runtime.GOOS == "windows" && !utils.IsRunningAsAdmin() {
+		if err := utils.ElevateToAdmin(); err != nil {
+			log.Fatal().Err(err).Msg("Failed to elevate privileges")
+		}
+		return
+	}
+
 	os.Setenv("FYNE_FONT", "")
 	os.Setenv("FYNE_SCALE", "1.1")
 	os.Setenv("FYNE_THEME", "dark")
 	var (
-		configPath = flag.String("config", "", "Configuration file path")
-		discover   = flag.Bool("discover", false, "Discover and report application data locations")
-		clean      = flag.String("clean", "", "Clean specific application (cursor/windsurf)")
-		cleanAll   = flag.Bool("clean-all", false, "Clean all found applications")
-		noConfirm  = flag.Bool("no-confirm", false, "Skip confirmation prompts")
-		dryRun     = flag.Bool("dry-run", false, "Preview actions without making changes")
-		verbose    = flag.Bool("verbose", false, "Show detailed output")
-		cli        = flag.Bool("cli", false, "Use command line interface instead of GUI")
-		version    = flag.Bool("version", false, "Show version information")
-		testSQLite = flag.String("test-sqlite", "", "Test SQLite database connection (provide database path)")
+		configPath  = flag.String("config", "", "Configuration file path")
+		discover    = flag.Bool("discover", false, "Discover and report application data locations")
+		clean       = flag.String("clean", "", "Clean specific application (cursor/windsurf)")
+		cleanAll    = flag.Bool("clean-all", false, "Clean all found applications")
+		noConfirm   = flag.Bool("no-confirm", false, "Skip confirmation prompts")
+		dryRun      = flag.Bool("dry-run", false, "Preview actions without making changes")
+		verbose     = flag.Bool("verbose", false, "Show detailed output")
+		cli         = flag.Bool("cli", false, "Use command line interface instead of GUI")
+		showVersion = flag.Bool("version", false, "Show version information")
+		testSQLite  = flag.String("test-sqlite", "", "Test SQLite database connection (provide database path)")
 	)
 	flag.Parse()
 
-	if *version {
+	if *showVersion {
 		fmt.Printf("Cursor & Windsurf Data Cleaner %s (Go)\n", version)
 		fmt.Println("Built with Go and Fyne GUI framework")
 		return

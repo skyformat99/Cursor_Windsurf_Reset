@@ -24,6 +24,14 @@ type Application struct {
 	DisplayName  string              `json:"display_name"`
 	ProcessNames []string            `json:"process_names"`
 	DataPaths    map[string][]string `json:"data_paths"`
+	RegKeys      []RegKeyConfig      `json:"reg_keys,omitempty"`
+}
+
+type RegKeyConfig struct {
+	Path            string   `json:"path"`             
+	Keys            []string `json:"keys"`             
+	FullClean       bool     `json:"fullclean"`        
+	WildcardSubKeys []string `json:"wildcard_subkeys"` 
 }
 
 // CleaningOptions represents cleaning configuration
@@ -116,6 +124,82 @@ func GetDefaultConfig() *Config {
 			"cursor": {
 				DisplayName:  "Cursor",
 				ProcessNames: []string{"cursor", "cursor.exe"},
+				RegKeys: []RegKeyConfig{
+					// HKCU Software paths
+					{
+						Path:      "HKEY_CURRENT_USER\\Software\\Cursor",
+						Keys:      []string{},
+						FullClean: true,
+					},
+					{
+						Path:      "HKEY_CURRENT_USER\\Software\\Cursor, Inc",
+						Keys:      []string{},
+						FullClean: true,
+					},
+
+					// HKLM Software paths
+					{
+						Path:      "HKEY_LOCAL_MACHINE\\Software\\Cursor",
+						Keys:      []string{},
+						FullClean: true,
+					},
+					{
+						Path:      "HKEY_LOCAL_MACHINE\\Software\\Cursor, Inc",
+						Keys:      []string{},
+						FullClean: true,
+					},
+
+					// Uninstall entries
+					{
+						Path:      "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Cursor",
+						Keys:      []string{},
+						FullClean: true,
+					},
+					{
+						Path:      "HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Cursor",
+						Keys:      []string{},
+						FullClean: true,
+					},
+
+					// Classes registration (with wildcard)
+					{
+						Path:            "HKEY_CURRENT_USER\\Software\\Classes",
+						Keys:            []string{},
+						FullClean:       true,
+						WildcardSubKeys: []string{"Cursor*"},
+					},
+					{
+						Path:            "HKEY_LOCAL_MACHINE\\Software\\Classes",
+						Keys:            []string{},
+						FullClean:       true,
+						WildcardSubKeys: []string{"Cursor*"},
+					},
+
+					// Feature usage (with wildcard)
+					{
+						Path:            "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FeatureUsage",
+						Keys:            []string{},
+						FullClean:       true,
+						WildcardSubKeys: []string{"Cursor*"},
+					},
+
+					// Additional common paths
+					{
+						Path:      "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\Cursor.exe",
+						Keys:      []string{},
+						FullClean: true,
+					},
+					{
+						Path:      "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run\\Cursor",
+						Keys:      []string{},
+						FullClean: true,
+					},
+					{
+						Path:      "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+						Keys:      []string{"Cursor"},
+						FullClean: false,
+					},
+				},
 				DataPaths: map[string][]string{
 					"windows": {
 						"%APPDATA%/Cursor",
@@ -153,6 +237,110 @@ func GetDefaultConfig() *Config {
 			"windsurf": {
 				DisplayName:  "Windsurf",
 				ProcessNames: []string{"windsurf", "windsurf.exe", "Windsurf"},
+				RegKeys: []RegKeyConfig{
+					// HKCU Software paths
+					{
+						Path:      "HKEY_CURRENT_USER\\Software\\Windsurf",
+						Keys:      []string{},
+						FullClean: true,
+					},
+					{
+						Path:      "HKEY_CURRENT_USER\\Software\\windsurf-ai",
+						Keys:      []string{},
+						FullClean: true,
+					},
+					{
+						Path:      "HKEY_CURRENT_USER\\Software\\Windsurf AI",
+						Keys:      []string{},
+						FullClean: true,
+					},
+
+					// HKLM Software paths
+					{
+						Path:      "HKEY_LOCAL_MACHINE\\Software\\Windsurf",
+						Keys:      []string{},
+						FullClean: true,
+					},
+					{
+						Path:      "HKEY_LOCAL_MACHINE\\Software\\windsurf-ai",
+						Keys:      []string{},
+						FullClean: true,
+					},
+					{
+						Path:      "HKEY_LOCAL_MACHINE\\Software\\Windsurf AI",
+						Keys:      []string{},
+						FullClean: true,
+					},
+
+					// Uninstall entries
+					{
+						Path:      "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Windsurf",
+						Keys:      []string{},
+						FullClean: true,
+					},
+					{
+						Path:      "HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Windsurf",
+						Keys:      []string{},
+						FullClean: true,
+					},
+
+					// Classes registration (with wildcard)
+					{
+						Path:            "HKEY_CURRENT_USER\\Software\\Classes",
+						Keys:            []string{},
+						FullClean:       true,
+						WildcardSubKeys: []string{"Windsurf*"},
+					},
+					{
+						Path:            "HKEY_LOCAL_MACHINE\\Software\\Classes",
+						Keys:            []string{},
+						FullClean:       true,
+						WildcardSubKeys: []string{"Windsurf*"},
+					},
+
+					// Feature usage, telemetry, and licenses (with wildcard)
+					{
+						Path:            "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FeatureUsage",
+						Keys:            []string{},
+						FullClean:       true,
+						WildcardSubKeys: []string{"*windsurf*"},
+					},
+					{
+						Path:            "HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Telemetry",
+						Keys:            []string{},
+						FullClean:       true,
+						WildcardSubKeys: []string{"*windsurf*"},
+					},
+					{
+						Path:            "HKEY_CURRENT_USER\\Software\\Licenses",
+						Keys:            []string{},
+						FullClean:       true,
+						WildcardSubKeys: []string{"*windsurf*"},
+					},
+					{
+						Path:            "HKEY_LOCAL_MACHINE\\Software\\Licenses",
+						Keys:            []string{},
+						FullClean:       true,
+						WildcardSubKeys: []string{"*windsurf*"},
+					},
+
+					// Additional startup and app paths
+					{
+						Path:      "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\Windsurf.exe",
+						Keys:      []string{},
+						FullClean: true,
+					},
+					{
+						Path:      "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run\\Windsurf",
+						Keys:      []string{},
+						FullClean: true,
+					},
+					{
+						Path:      "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+						Keys:      []string{"Windsurf"},
+						FullClean: false,
+					},
+				},
 				DataPaths: map[string][]string{
 					"windows": {
 						"%APPDATA%/Windsurf",

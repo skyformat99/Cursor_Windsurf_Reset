@@ -341,7 +341,22 @@ func (e *Engine) CleanApplication(ctx context.Context, appName string) error {
 		log.Error().Err(err).Str("app", appName).Msg("Failed to clean databases")
 	}
 
-	// Phase 3: Cache cleaning
+	// Phase 3: Registry cleaning (Windows only)
+	if runtime.GOOS == "windows" {
+		e.sendProgress(ProgressUpdate{
+			Type:     "phase",
+			Message:  e.localizer.MustLocalize(&i18n.LocalizeConfig{MessageID: "ResettingRegistry"}),
+			AppName:  appName,
+			Phase:    "registry",
+			Progress: 70,
+		})
+		
+		if err := e.cleanRegistry(appName); err != nil {
+			log.Error().Err(err).Str("app", appName).Msg("Failed to clean registry")
+		}
+	}
+
+	// Phase 4: Cache cleaning
 	e.sendProgress(ProgressUpdate{
 		Type:     "phase",
 		Message:  e.localizer.MustLocalize(&i18n.LocalizeConfig{MessageID: "ResettingCache"}),
