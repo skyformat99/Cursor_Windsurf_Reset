@@ -137,7 +137,7 @@ func GetDefaultConfig() *Config {
 						"~/Library/Logs/Cursor",
 						"/Applications/Cursor.app",
 						"/usr/local/Cursor",
-						"/opt/cursor"
+						"/opt/cursor",
 					},
 					"linux": {
 						"~/.config/Cursor",
@@ -146,7 +146,7 @@ func GetDefaultConfig() *Config {
 						"/usr/share/cursor",
 						"/usr/local/share/cursor",
 						"/opt/cursor",
-						"/var/lib/cursor"
+						"/var/lib/cursor",
 					},
 				},
 			},
@@ -168,7 +168,7 @@ func GetDefaultConfig() *Config {
 						"%LOCALAPPDATA%/Temp/windsurf",
 						"%TEMP%/windsurf",
 						"%LOCALAPPDATA%/Packages/*Windsurf*",
-						"%LOCALAPPDATA%\Microsoft/Windows/WebCache/*windsurf*",
+						"%LOCALAPPDATA%/Microsoft/Windows/WebCache/*windsurf*",
 					},
 					"darwin": {
 						"~/Library/Application Support/Windsurf",
