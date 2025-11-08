@@ -2,6 +2,11 @@
 
 An advanced tool for resetting Cursor and Windsurf application data, supporting the latest versions of Cursor and Windsurf.
 [中文说明](https://github.com/whispin/Cursor_Windsurf_Reset/blob/main/README_ZH.md)
+
+Don't fork this repository and only change README.MD file to sell to others for profit, especially some Chinese like bed bugs
+Don't fork this repository and only change README.MD file to sell to others for profit, especially some Chinese like bed bugs
+Don't fork this repository and only change README.MD file to sell to others for profit, especially some Chinese like bed bugs
+
 ## ✨ Interface Screenshot
 
 ![Interface Screenshot](https://github.com/whispin/Cursor_Windsurf_Reset/blob/main/screenshot/homepage.jpg?raw=true)
