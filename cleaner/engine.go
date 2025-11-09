@@ -11,21 +11,48 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"time"
 
 	"Cursor_Windsurf_Reset/config"
 	appi18n "Cursor_Windsurf_Reset/i18n"
+	"Cursor_Windsurf_Reset/logger"
 	"github.com/google/uuid"
 	"github.com/nicksnyder/go-i18n/v2/i18n"
-	"github.com/rs/zerolog"
 	_ "modernc.org/sqlite"
 )
 
-var log zerolog.Logger
+var (
+	appLogger *logger.Logger
+)
 
-func init() {
-	log = zerolog.New(os.Stderr).With().Timestamp().Logger()
+// logDebug 辅助函数用于调试日志
+func logDebug(msg string, keysAndValues ...interface{}) {
+	if appLogger != nil {
+		appLogger.Debug(msg, keysAndValues...)
+	}
+}
+
+// logInfo 辅助函数用于信息日志
+func logInfo(msg string, keysAndValues ...interface{}) {
+	if appLogger != nil {
+		appLogger.Info(msg, keysAndValues...)
+	}
+}
+
+// logWarn 辅助函数用于警告日志
+func logWarn(msg string, keysAndValues ...interface{}) {
+	if appLogger != nil {
+		appLogger.Warn(msg, keysAndValues...)
+	}
+}
+
+// logError 辅助函数用于错误日志
+func logError(msg string, keysAndValues ...interface{}) {
+	if appLogger != nil {
+		appLogger.Error(msg, keysAndValues...)
+	}
 }
 
 type Engine struct {
@@ -64,6 +91,18 @@ func NewEngine(cfg *config.Config, dryRun, verbose bool, localizer *appi18n.Loca
 
 	engine.setupBackupDirectory()
 
+	logDir := filepath.Join(engine.backupBaseDir, "logs")
+	var err error
+	appLogger, err = logger.Init(logDir, verbose)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to init logger: %v\n", err)
+	} else {
+		appLogger.Info("Engine初始化",
+			"dry_run", dryRun,
+			"verbose", verbose,
+			"backup_dir", engine.backupBaseDir)
+	}
+
 	engine.discoverAppDataPaths()
 
 	return engine
@@ -76,13 +115,13 @@ func (e *Engine) GetProgressChannel() <-chan ProgressUpdate {
 func (e *Engine) setupBackupDirectory() {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to get home directory")
+		fmt.Fprintf(os.Stderr, "Failed to get home directory: %v\n", err)
 		homeDir = "."
 	}
 
 	e.backupBaseDir = filepath.Join(homeDir, "CursorWindsurf_Advanced_Backups")
 	if err := os.MkdirAll(e.backupBaseDir, 0755); err != nil {
-		log.Error().Err(err).Msg("Failed to create backup directory")
+		fmt.Fprintf(os.Stderr, "Failed to create backup directory: %v\n", err)
 	}
 }
 
@@ -116,7 +155,7 @@ func (e *Engine) expandPathTemplate(template string) string {
 		if err == nil {
 			template = strings.Replace(template, "~", homeDir, 1)
 		} else {
-			log.Warn().Err(err).Msg("Failed to get home directory")
+			logWarn("Failed to get home directory", "error", err)
 		}
 	}
 
@@ -246,7 +285,7 @@ func (e *Engine) createCompressedBackup(sourcePath, backupPath string) (string, 
 		return "", err
 	}
 
-	log.Info().Str("path", backupPath).Msg("Created compressed backup")
+	logInfo("Created compressed backup", "path", backupPath)
 	return backupPath, nil
 }
 
@@ -266,25 +305,37 @@ func (e *Engine) createDirectoryBackup(sourcePath, backupPath string) (string, e
 		return "", err
 	}
 
-	log.Info().Str("path", backupPath).Msg("Created directory backup")
+	logInfo("Created directory backup", "path", backupPath)
 	return backupPath, nil
 }
 
-func (e *Engine) CleanApplication(ctx context.Context, appName string) error {
+func (e *Engine) CleanApplication(ctx context.Context, appName string) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Error().
-				Interface("panic", r).
-				Str("app", appName).
-				Msg("清理过程发生panic")
+			stack := debug.Stack()
+			if appLogger != nil {
+				appLogger.Error("清理过程发生panic",
+					"app", appName,
+					"panic", r,
+					"stack_trace", string(stack))
+			}
+
 			e.sendProgress(ProgressUpdate{
 				Type:     "error",
 				Message:  fmt.Sprintf("清理过程发生错误: %v", r),
 				AppName:  appName,
 				Progress: 0,
 			})
+			err = fmt.Errorf("清理过程发生错误: %v", r)
 		}
 	}()
+
+	if appLogger != nil {
+		appLogger.Info("开始清理应用程序",
+			"app", appName,
+			"dry_run", e.dryRun,
+			"goroutines", runtime.NumGoroutine())
+	}
 
 	e.sendProgress(ProgressUpdate{
 		Type:     "start",
@@ -339,8 +390,18 @@ func (e *Engine) CleanApplication(ctx context.Context, appName string) error {
 		Progress: 20,
 	})
 
+	if appLogger != nil {
+		appLogger.Info("Phase 1: 开始修改遥测标识", "app", appName, "path", appPath)
+	}
+
 	if err := e.modifyTelemetry(appPath, appName); err != nil {
-		log.Error().Err(err).Str("app", appName).Msg("Failed to modify telemetry")
+		if appLogger != nil {
+			appLogger.Error("修改遥测标识失败", "app", appName, "error", err)
+		}
+	} else {
+		if appLogger != nil {
+			appLogger.Info("Phase 1: 遥测标识修改完成", "app", appName)
+		}
 	}
 
 	// Phase 2: Database cleaning
@@ -352,8 +413,18 @@ func (e *Engine) CleanApplication(ctx context.Context, appName string) error {
 		Progress: 50,
 	})
 
+	if appLogger != nil {
+		appLogger.Info("Phase 2: 开始重置数据库", "app", appName, "path", appPath)
+	}
+
 	if err := e.cleanDatabases(appPath, appName); err != nil {
-		log.Error().Err(err).Str("app", appName).Msg("Failed to clean databases")
+		if appLogger != nil {
+			appLogger.Error("重置数据库失败", "app", appName, "error", err)
+		}
+	} else {
+		if appLogger != nil {
+			appLogger.Info("Phase 2: 数据库重置完成", "app", appName)
+		}
 	}
 
 	// Phase 3: Registry cleaning (Windows only)
@@ -366,8 +437,18 @@ func (e *Engine) CleanApplication(ctx context.Context, appName string) error {
 			Progress: 70,
 		})
 
+		if appLogger != nil {
+			appLogger.Info("Phase 3: 开始清理注册表", "app", appName)
+		}
+
 		if err := e.cleanRegistry(appName); err != nil {
-			log.Error().Err(err).Str("app", appName).Msg("Failed to clean registry")
+			if appLogger != nil {
+				appLogger.Error("清理注册表失败", "app", appName, "error", err)
+			}
+		} else {
+			if appLogger != nil {
+				appLogger.Info("Phase 3: 注册表清理完成", "app", appName)
+			}
 		}
 	}
 
@@ -380,8 +461,18 @@ func (e *Engine) CleanApplication(ctx context.Context, appName string) error {
 		Progress: 80,
 	})
 
+	if appLogger != nil {
+		appLogger.Info("Phase 4: 开始清理缓存", "app", appName, "path", appPath)
+	}
+
 	if err := e.cleanCache(appPath, appName); err != nil {
-		log.Error().Err(err).Str("app", appName).Msg("Failed to clean cache")
+		if appLogger != nil {
+			appLogger.Error("清理缓存失败", "app", appName, "error", err)
+		}
+	} else {
+		if appLogger != nil {
+			appLogger.Info("Phase 4: 缓存清理完成", "app", appName)
+		}
 	}
 
 	e.sendProgress(ProgressUpdate{
@@ -391,11 +482,20 @@ func (e *Engine) CleanApplication(ctx context.Context, appName string) error {
 		Progress: 100,
 	})
 
+	if appLogger != nil {
+		appLogger.Info("清理应用程序完成",
+			"app", appName,
+			"success", true,
+			"goroutines", runtime.NumGoroutine())
+		appLogger.Sync()
+	}
+
 	return nil
 }
 
 // modifyTelemetry modifies telemetry IDs in database and JSON files
 func (e *Engine) modifyTelemetry(appPath, appName string) error {
+	logInfo("开始修改遥测标识", "app", appName, "path", appPath)
 	telemetryKeys := e.config.CleaningOptions.TelemetryKeys
 	sessionKeys := e.config.CleaningOptions.SessionKeys
 	dbFiles := e.config.CleaningOptions.DatabaseFiles
@@ -449,9 +549,10 @@ func (e *Engine) modifyTelemetry(appPath, appName string) error {
 		}
 
 		// 创建备份
+		logDebug("创建文件备份", "file", filepath.Base(filePath), "type", "telemetry")
 		_, err := e.CreateBackup(filePath, fmt.Sprintf("%s_telemetry_%s", appName, filepath.Base(filePath)))
 		if err != nil {
-			log.Warn().Str("file", filePath).Err(err).Msg("Failed to backup file")
+			logWarn("Failed to backup file", "file", filePath, "error", err)
 		}
 
 		// 根据文件类型处理
@@ -481,7 +582,10 @@ func (e *Engine) modifyTelemetry(appPath, appName string) error {
 
 		// 如果修改成功，记录日志
 		if fileUpdated {
-			log.Info().Str("file", filePath).Int("updated_keys", fileUpdatedKeys).Int("deleted_keys", fileDeletedKeys).Msg("Successfully modified identifier file")
+			logInfo("成功修改标识符文件",
+				"file", filePath,
+				"updated_keys", fileUpdatedKeys,
+				"deleted_keys", fileDeletedKeys)
 		}
 	}
 
@@ -504,6 +608,7 @@ func (e *Engine) modifyTelemetry(appPath, appName string) error {
 
 // processSQLiteFile 处理单个SQLite文件，返回是否更新成功，更新的键数，删除的键数，以及处理是否成功
 func (e *Engine) processSQLiteFile(dbPath string, telemetryKeys, sessionKeys []string) (bool, int, int, bool) {
+	logDebug("Processing SQLite file", "db_path", dbPath)
 
 	// 尝试使用不同的连接参数打开数据库
 	connectionStrings := []string{
@@ -515,30 +620,30 @@ func (e *Engine) processSQLiteFile(dbPath string, telemetryKeys, sessionKeys []s
 	for _, connStr := range connectionStrings {
 		db, err := sql.Open("sqlite", connStr)
 		if err != nil {
-			log.Debug().Str("connection", connStr).Err(err).Msg("Failed to open database connection")
+			logDebug("Failed to open database connection", "connection", connStr, "error", err)
 			continue
 		}
 
 		// 检查数据库连接
 		if err := db.Ping(); err != nil {
 			db.Close()
-			log.Debug().Str("connection", connStr).Err(err).Msg("Failed to ping database")
+			logDebug("Failed to ping database", "connection", connStr, "error", err)
 			continue
 		}
 
-		log.Debug().Str("connection", connStr).Msg("Successfully connected to database")
+		logDebug("Successfully connected to database", "connection", connStr)
 
 		// 查找ItemTable或类似表
 		tables, err := e.findRelevantTables(db)
 		if err != nil {
 			db.Close()
-			log.Error().Err(err).Msg("Failed to find relevant tables")
+			logError("Failed to find relevant tables", "error", err)
 			continue
 		}
 
 		if len(tables) == 0 {
 			db.Close()
-			log.Warn().Msg("No processable tables found in database")
+			logWarn("No processable tables found in database")
 			return false, 0, 0, true // 没有表不算失败
 		}
 
@@ -546,7 +651,7 @@ func (e *Engine) processSQLiteFile(dbPath string, telemetryKeys, sessionKeys []s
 		tx, err := db.Begin()
 		if err != nil {
 			db.Close()
-			log.Error().Err(err).Msg("Failed to begin transaction")
+			logError("Failed to begin transaction", "error", err)
 			continue
 		}
 
@@ -578,13 +683,13 @@ func (e *Engine) processSQLiteFile(dbPath string, telemetryKeys, sessionKeys []s
 
 				result, err := tx.Exec(updateSQL, value, key)
 				if err != nil {
-					log.Debug().Str("table", tableName).Str("key", key).Err(err).Msg("Failed to update key")
+					logDebug("Failed to update key", "table", tableName, "key", key, "error", err)
 					continue
 				}
 
 				if affected, err := result.RowsAffected(); err == nil && affected > 0 {
 					totalUpdatedKeys++
-					log.Debug().Str("table", tableName).Str("key", key).Msg("Successfully updated key")
+					logDebug("Successfully updated key", "table", tableName, "key", key)
 				}
 			}
 
@@ -596,27 +701,27 @@ func (e *Engine) processSQLiteFile(dbPath string, telemetryKeys, sessionKeys []s
 
 				result, err := tx.Exec(deleteSQL, key)
 				if err != nil {
-					log.Debug().Str("table", tableName).Str("key", key).Err(err).Msg("Failed to delete key")
+					logDebug("Failed to delete key", "table", tableName, "key", key, "error", err)
 					continue
 				}
 
 				if affected, err := result.RowsAffected(); err == nil && affected > 0 {
 					totalDeletedKeys++
-					log.Debug().Str("table", tableName).Str("key", key).Msg("Successfully deleted key")
+					logDebug("Successfully deleted key", "table", tableName, "key", key)
 				}
 			}
 		}
 
 		// 提交事务
 		if err := tx.Commit(); err != nil {
-			log.Error().Err(err).Msg("Failed to commit transaction")
+			logError("Failed to commit transaction", "error", err)
 			return false, 0, 0, false
 		}
 
 		// 如果有更改，执行VACUUM
 		if totalUpdatedKeys > 0 || totalDeletedKeys > 0 {
 			if _, err := db.Exec("VACUUM"); err != nil {
-				log.Warn().Err(err).Msg("Failed to execute VACUUM")
+				logWarn("Failed to execute VACUUM", "error", err)
 				// 继续处理，不返回错误
 			}
 			return true, totalUpdatedKeys, totalDeletedKeys, true
@@ -740,6 +845,7 @@ func (e *Engine) analyzeTableStructure(db *sql.DB, tableName string) (TableInfo,
 
 // processJSONFile 处理单个JSON文件，返回是否更新成功，更新的键数，删除的键数，以及处理是否成功
 func (e *Engine) processJSONFile(jsonPath string, telemetryKeys, sessionKeys []string) (bool, int, int, bool) {
+	logDebug("Processing JSON file", "json_path", jsonPath)
 
 	// 1. 创建备份副本以便出错时恢复
 	tempBackupPath := jsonPath + ".bak"
@@ -756,7 +862,7 @@ func (e *Engine) processJSONFile(jsonPath string, telemetryKeys, sessionKeys []s
 	// 2. 读取JSON文件，使用更安全的方式
 	data, err := os.ReadFile(jsonPath)
 	if err != nil {
-		log.Error().Str("path", jsonPath).Err(err).Msg("读取JSON文件失败")
+		logError("读取JSON文件失败", "path", jsonPath, "error", err)
 		return false, 0, 0, false
 	}
 
@@ -771,7 +877,7 @@ func (e *Engine) processJSONFile(jsonPath string, telemetryKeys, sessionKeys []s
 		// 尝试作为JSON数组解析
 		var jsonArray []interface{}
 		if err2 := json.Unmarshal(data, &jsonArray); err2 != nil {
-			log.Error().Str("path", jsonPath).Err(err).Msg("解析JSON失败")
+			logError("解析JSON失败", "path", jsonPath, "error", err)
 			return false, 0, 0, false
 		}
 
@@ -796,13 +902,13 @@ func (e *Engine) processJSONFile(jsonPath string, telemetryKeys, sessionKeys []s
 		// 使用更美观的缩进格式
 		newData, err := json.MarshalIndent(jsonData, "", "  ")
 		if err != nil {
-			log.Error().Str("path", jsonPath).Err(err).Msg("JSON序列化失败")
+			logError("JSON序列化失败", "path", jsonPath, "error", err)
 			// 尝试恢复备份
 			if _, err := os.Stat(tempBackupPath); err == nil {
 				if restoreErr := copyFile(tempBackupPath, jsonPath); restoreErr != nil {
-					log.Error().Str("path", jsonPath).Err(restoreErr).Msg("恢复备份失败")
+					logError("恢复备份失败", "path", jsonPath, "error", restoreErr)
 				} else {
-					log.Info().Str("path", jsonPath).Msg("已从备份恢复原始文件")
+					logInfo("已从备份恢复原始文件", "path", jsonPath)
 				}
 			}
 			return false, 0, 0, false
@@ -811,22 +917,22 @@ func (e *Engine) processJSONFile(jsonPath string, telemetryKeys, sessionKeys []s
 		// 写入文件，保持原始文件权限
 		fileInfo, err := os.Stat(jsonPath)
 		if err != nil {
-			log.Warn().Str("path", jsonPath).Err(err).Msg("获取文件权限失败，使用默认权限")
+			logWarn("获取文件权限失败，使用默认权限", "path", jsonPath, "error", err)
 		}
 
 		// 使用临时文件并重命名的方式写入，避免文件损坏
 		tempFilePath := jsonPath + ".tmp"
 		err = os.WriteFile(tempFilePath, newData, 0644)
 		if err != nil {
-			log.Error().Str("path", tempFilePath).Err(err).Msg("写入临时文件失败")
+			logError("写入临时文件失败", "path", tempFilePath, "error", err)
 			// 尝试删除临时文件
 			os.Remove(tempFilePath)
 			// 尝试恢复备份
 			if _, err := os.Stat(tempBackupPath); err == nil {
 				if restoreErr := copyFile(tempBackupPath, jsonPath); restoreErr != nil {
-					log.Error().Str("path", jsonPath).Err(restoreErr).Msg("恢复备份失败")
+					logError("恢复备份失败", "path", jsonPath, "error", restoreErr)
 				} else {
-					log.Info().Str("path", jsonPath).Msg("已从备份恢复原始文件")
+					logInfo("已从备份恢复原始文件", "path", jsonPath)
 				}
 			}
 			return false, 0, 0, false
@@ -835,32 +941,31 @@ func (e *Engine) processJSONFile(jsonPath string, telemetryKeys, sessionKeys []s
 		// 如果有获取到原始权限，则设置相同的权限
 		if fileInfo != nil {
 			if err := os.Chmod(tempFilePath, fileInfo.Mode()); err != nil {
-				log.Warn().Str("path", tempFilePath).Err(err).Msg("设置文件权限失败")
+				logWarn("设置文件权限失败", "path", tempFilePath, "error", err)
 				// 继续处理，不视为致命错误
 			}
 		}
 
 		// 重命名临时文件，替换原始文件
 		if err := os.Rename(tempFilePath, jsonPath); err != nil {
-			log.Error().Str("from", tempFilePath).Str("to", jsonPath).Err(err).Msg("重命名文件失败")
+			logError("重命名文件失败", "from", tempFilePath, "to", jsonPath, "error", err)
 			// 尝试删除临时文件
 			os.Remove(tempFilePath)
 			// 尝试恢复备份
 			if _, err := os.Stat(tempBackupPath); err == nil {
 				if restoreErr := copyFile(tempBackupPath, jsonPath); restoreErr != nil {
-					log.Error().Str("path", jsonPath).Err(restoreErr).Msg("恢复备份失败")
+					logError("恢复备份失败", "path", jsonPath, "error", restoreErr)
 				} else {
-					log.Info().Str("path", jsonPath).Msg("已从备份恢复原始文件")
+					logInfo("已从备份恢复原始文件", "path", jsonPath)
 				}
 			}
 			return false, 0, 0, false
 		}
 
-		log.Info().
-			Str("path", jsonPath).
-			Int("updated_keys", updatedKeys).
-			Int("deleted_keys", deletedKeys).
-			Msg("成功更新JSON文件")
+		logInfo("成功更新JSON文件",
+			"path", jsonPath,
+			"updated_keys", updatedKeys,
+			"deleted_keys", deletedKeys)
 		return true, updatedKeys, deletedKeys, true
 	}
 
@@ -915,14 +1020,14 @@ func processNestedJSON(data map[string]interface{}, telemetryKeys, sessionKeys [
 
 // cleanDatabases cleans database files
 func (e *Engine) cleanDatabases(appPath, appName string) error {
-	log.Info().Str("app", appName).Str("path", appPath).Msg("开始重置数据库")
+	logInfo("开始重置数据库", "app", appName, "path", appPath)
 
 	// 首先查找所有数据库文件
 	dbFiles := e.findDatabaseFiles(appPath)
 	totalFiles := len(dbFiles)
 
 	if totalFiles == 0 {
-		log.Warn().Str("app", appName).Msg("没有找到数据库文件")
+		logWarn("没有找到数据库文件", "app", appName)
 		e.sendProgress(ProgressUpdate{
 			Type:     "database",
 			Message:  e.localizeMessage("NoDatabaseFound", map[string]interface{}{}),
@@ -968,16 +1073,16 @@ func (e *Engine) cleanDatabases(appPath, appName string) error {
 
 		// 检查是否是备份文件
 		if strings.Contains(strings.ToLower(dbPath), "backup") || strings.Contains(dbPath, ".bak") {
-			log.Debug().Str("path", dbPath).Msg("跳过备份文件")
+			logDebug("跳过备份文件", "path", dbPath)
 			continue
 		}
 
 		// 创建备份
 		backupPath, err := e.CreateBackup(dbPath, fmt.Sprintf("%s_database_%s", appName, filepath.Base(dbPath)))
 		if err != nil {
-			log.Warn().Str("file", dbPath).Err(err).Msg("备份数据库失败，继续处理")
+			logWarn("备份数据库失败，继续处理", "file", dbPath, "error", err)
 		} else {
-			log.Info().Str("file", dbPath).Str("backup", backupPath).Msg("成功创建数据库备份")
+			logInfo("成功创建数据库备份", "file", dbPath, "backup", backupPath)
 		}
 
 		// 重置数据库
@@ -994,7 +1099,7 @@ func (e *Engine) cleanDatabases(appPath, appName string) error {
 		}
 
 		if cleaned {
-			log.Info().Str("file", dbPath).Int("records_affected", recordsAffected).Msg("成功重置数据库")
+			logInfo("成功重置数据库", "file", dbPath, "records_affected", recordsAffected)
 		}
 	}
 
@@ -1017,6 +1122,7 @@ func (e *Engine) cleanDatabases(appPath, appName string) error {
 
 // cleanSQLiteDatabaseAdvanced 增强版的SQLite数据库重置函数
 func (e *Engine) cleanSQLiteDatabaseAdvanced(dbPath string, keywords []string) (bool, int, bool) {
+	logDebug("Starting advanced SQLite database cleaning", "db_path", dbPath)
 
 	// 尝试使用不同的连接参数打开数据库
 	connectionStrings := []string{
@@ -1028,30 +1134,30 @@ func (e *Engine) cleanSQLiteDatabaseAdvanced(dbPath string, keywords []string) (
 	for _, connStr := range connectionStrings {
 		db, err := sql.Open("sqlite", connStr)
 		if err != nil {
-			log.Debug().Str("connection", connStr).Err(err).Msg("尝试连接数据库失败")
+			logDebug("尝试连接数据库失败", "connection", connStr, "error", err)
 			continue
 		}
 		defer db.Close()
 
 		// 检查数据库连接
 		if err := db.Ping(); err != nil {
-			log.Debug().Str("connection", connStr).Err(err).Msg("Ping数据库失败")
+			logDebug("Ping数据库失败", "connection", connStr, "error", err)
 			continue
 		}
 
-		log.Debug().Str("connection", connStr).Msg("成功连接到数据库")
+		logDebug("成功连接到数据库", "connection", connStr)
 
 		// 开始事务
 		tx, err := db.Begin()
 		if err != nil {
-			log.Error().Err(err).Msg("开始事务失败")
+			logError("开始事务失败", "error", err)
 			continue
 		}
 
 		// 获取所有表
 		tables, err := tx.Query("SELECT name FROM sqlite_master WHERE type='table'")
 		if err != nil {
-			log.Error().Err(err).Msg("获取表列表失败")
+			logError("获取表列表失败", "error", err)
 			tx.Rollback()
 			continue
 		}
@@ -1060,7 +1166,7 @@ func (e *Engine) cleanSQLiteDatabaseAdvanced(dbPath string, keywords []string) (
 		for tables.Next() {
 			var tableName string
 			if err := tables.Scan(&tableName); err != nil {
-				log.Warn().Err(err).Msg("读取表名失败")
+				logWarn("读取表名失败", "error", err)
 				continue
 			}
 			// 跳过系统表
@@ -1071,7 +1177,7 @@ func (e *Engine) cleanSQLiteDatabaseAdvanced(dbPath string, keywords []string) (
 		tables.Close()
 
 		if len(tableNames) == 0 {
-			log.Warn().Str("path", dbPath).Msg("数据库中没有找到用户表")
+			logWarn("数据库中没有找到用户表", "path", dbPath)
 			tx.Rollback()
 			return false, 0, true // 没有表不算失败
 		}
@@ -1083,26 +1189,26 @@ func (e *Engine) cleanSQLiteDatabaseAdvanced(dbPath string, keywords []string) (
 		for _, tableName := range tableNames {
 			// 检查表名是否安全
 			if !isValidTableName(tableName) {
-				log.Warn().Str("table", tableName).Msg("跳过不安全的表名")
+				logWarn("跳过不安全的表名", "table", tableName)
 				continue
 			}
 
 			// 查找匹配缓存模式的表
 			for _, pattern := range cachePatterns {
 				if strings.Contains(strings.ToLower(tableName), pattern) {
-					log.Debug().Str("table", tableName).Str("pattern", pattern).Msg("重置缓存表")
+					logDebug("重置缓存表", "table", tableName, "pattern", pattern)
 
 					// 清空整个表
 					deleteSql := fmt.Sprintf("DELETE FROM %s", quoteIdentifier(tableName))
 					result, err := tx.Exec(deleteSql)
 					if err != nil {
-						log.Warn().Str("table", tableName).Err(err).Msg("清空表失败")
+						logWarn("清空表失败", "table", tableName, "error", err)
 						continue
 					}
 
 					if affected, err := result.RowsAffected(); err == nil && affected > 0 {
 						cleanedRecords += int(affected)
-						log.Info().Str("table", tableName).Int64("records", affected).Msg("清空表成功")
+						logInfo("清空表成功", "table", tableName, "records", affected)
 					}
 					break
 				}
@@ -1120,7 +1226,7 @@ func (e *Engine) cleanSQLiteDatabaseAdvanced(dbPath string, keywords []string) (
 			columnSQL := fmt.Sprintf("PRAGMA table_info(%s)", quoteIdentifier(tableName))
 			colRows, err := tx.Query(columnSQL)
 			if err != nil {
-				log.Warn().Str("table", tableName).Err(err).Msg("获取表列信息失败")
+				logWarn("获取表列信息失败", "table", tableName, "error", err)
 				continue
 			}
 
@@ -1148,13 +1254,13 @@ func (e *Engine) cleanSQLiteDatabaseAdvanced(dbPath string, keywords []string) (
 						quoteIdentifier(column))
 					result, err := tx.Exec(deleteSql, "%"+keyword+"%")
 					if err != nil {
-						log.Debug().Str("table", tableName).Str("column", column).Str("keyword", keyword).Err(err).Msg("按关键词删除记录失败")
+						logDebug("按关键词删除记录失败", "table", tableName, "column", column, "keyword", keyword, "error", err)
 						continue
 					}
 
 					if affected, err := result.RowsAffected(); err == nil && affected > 0 {
 						cleanedRecords += int(affected)
-						log.Info().Str("table", tableName).Str("column", column).Str("keyword", keyword).Int64("records", affected).Msg("按关键词删除记录成功")
+						logInfo("按关键词删除记录成功", "table", tableName, "column", column, "keyword", keyword, "records", affected)
 					}
 				}
 			}
@@ -1165,7 +1271,7 @@ func (e *Engine) cleanSQLiteDatabaseAdvanced(dbPath string, keywords []string) (
 				columnLower := strings.ToLower(column)
 				for _, userCol := range userColumns {
 					if columnLower == userCol || strings.Contains(columnLower, userCol) {
-						log.Debug().Str("table", tableName).Str("column", column).Msg("尝试重置用户相关列")
+						logDebug("尝试重置用户相关列", "table", tableName, "column", column)
 
 						// 尝试将字段设为NULL或空值
 						updateSql := fmt.Sprintf("UPDATE %s SET %s = NULL WHERE %s IS NOT NULL",
@@ -1174,7 +1280,7 @@ func (e *Engine) cleanSQLiteDatabaseAdvanced(dbPath string, keywords []string) (
 							quoteIdentifier(column))
 						result, err := tx.Exec(updateSql)
 						if err != nil {
-							log.Debug().Str("table", tableName).Str("column", column).Err(err).Msg("设置列为NULL失败，尝试清空")
+							logDebug("设置列为NULL失败，尝试清空", "table", tableName, "column", column, "error", err)
 
 							// 尝试清空值
 							updateSql = fmt.Sprintf("UPDATE %s SET %s = '' WHERE %s != ''",
@@ -1183,14 +1289,14 @@ func (e *Engine) cleanSQLiteDatabaseAdvanced(dbPath string, keywords []string) (
 								quoteIdentifier(column))
 							result, err = tx.Exec(updateSql)
 							if err != nil {
-								log.Debug().Str("table", tableName).Str("column", column).Err(err).Msg("清空列值失败")
+								logDebug("清空列值失败", "table", tableName, "column", column, "error", err)
 								continue
 							}
 						}
 
 						if affected, err := result.RowsAffected(); err == nil && affected > 0 {
 							cleanedRecords += int(affected)
-							log.Info().Str("table", tableName).Str("column", column).Int64("records", affected).Msg("重置用户相关列成功")
+							logInfo("重置用户相关列成功", "table", tableName, "column", column, "records", affected)
 						}
 					}
 				}
@@ -1199,16 +1305,16 @@ func (e *Engine) cleanSQLiteDatabaseAdvanced(dbPath string, keywords []string) (
 
 		// 提交事务
 		if err := tx.Commit(); err != nil {
-			log.Error().Err(err).Msg("提交事务失败")
+			logError("提交事务失败", "error", err)
 			tx.Rollback()
 			return false, 0, false
 		}
 
 		// 如果有重置的记录，优化数据库
 		if cleanedRecords > 0 {
-			log.Info().Str("path", dbPath).Msg("优化数据库")
+			logInfo("优化数据库", "path", dbPath)
 			if _, err := db.Exec("VACUUM"); err != nil {
-				log.Warn().Err(err).Msg("执行VACUUM失败")
+				logWarn("执行VACUUM失败", "error", err)
 				// 继续处理，不返回错误
 			}
 			return true, cleanedRecords, true
@@ -1263,6 +1369,7 @@ func (e *Engine) getTableColumns(db *sql.DB, tableName string) ([]string, error)
 
 // cleanCache cleans cache directories
 func (e *Engine) cleanCache(appPath, appName string) error {
+	logInfo("Starting cache cleaning", "app", appName, "path", appPath)
 	cacheDirs := e.config.CleaningOptions.CacheDirectories
 
 	e.sendProgress(ProgressUpdate{
@@ -1298,12 +1405,12 @@ func (e *Engine) cleanCache(appPath, appName string) error {
 		foundDirs := e.findDirectoriesRecursive(appPath, []string{dirName})
 
 		if len(foundDirs) > 0 {
-			log.Info().Int("count", len(foundDirs)).Str("dir_type", dirName).Msgf("Found %d %s directories", len(foundDirs), dirName)
+			logInfo(fmt.Sprintf("Found %d %s directories", len(foundDirs), dirName), "count", len(foundDirs), "dir_type", dirName)
 			for _, dir := range foundDirs {
-				log.Debug().Str("type", dirName).Str("path", dir).Msg("Found cache directory")
+				logDebug("Found cache directory", "type", dirName, "path", dir)
 			}
 		} else {
-			log.Debug().Str("type", dirName).Msg("No directories found")
+			logDebug("No directories found", "type", dirName)
 		}
 
 		allFoundDirs = append(allFoundDirs, foundDirs...)
@@ -1319,7 +1426,7 @@ func (e *Engine) cleanCache(appPath, appName string) error {
 
 	// 如果没有找到任何缓存目录，返回提示信息
 	if len(allFoundDirs) == 0 {
-		log.Warn().Str("app", appName).Str("path", appPath).Msg("No cache directories found")
+		logWarn("No cache directories found", "app", appName, "path", appPath)
 		e.sendProgress(ProgressUpdate{
 			Type:     "cache",
 			Message:  e.localizeMessage("NoCacheFound", map[string]interface{}{}),
@@ -1384,43 +1491,40 @@ func (e *Engine) cleanCache(appPath, appName string) error {
 			backupName := fmt.Sprintf("%s_cache_%s", appName, strings.ReplaceAll(filepath.Base(dir), "/", "_"))
 			_, err := e.CreateBackup(dir, backupName)
 			if err != nil {
-				log.Warn().Str("dir", dir).Err(err).Msg("Failed to create backup")
+				logWarn("Failed to create backup", "dir", dir, "error", err)
 			}
 
 			// 清空目录内容
 			if e.dryRun {
-				log.Info().Str("dir", dir).Str("size", e.FormatSize(sizeBefore)).Msg("Would clear cache directory")
+				logInfo("Would clear cache directory", "dir", dir, "size", e.FormatSize(sizeBefore))
 			} else {
 				if err := e.clearDirectoryContents(dir); err != nil {
-					log.Error().Str("dir", dir).Err(err).Msg("Failed to clear cache directory")
+					logError("Failed to clear cache directory", "dir", dir, "error", err)
 				} else {
 					stats[dirName].CleanedDirs++
-					log.Info().
-						Str("dir", dir).
-						Str("size_freed", e.FormatSize(sizeBefore)).
-						Msg("Cleared cache directory")
+					logInfo("Cleared cache directory",
+						"dir", dir,
+						"size_freed", e.FormatSize(sizeBefore))
 				}
 
 				// 验证重置结果
 				sizeAfter := e.GetDirectorySize(dir)
 				if sizeAfter > 0 {
-					log.Warn().
-						Str("dir", dir).
-						Str("remaining_size", e.FormatSize(sizeAfter)).
-						Msg("Directory not completely cleared")
+					logWarn("Directory not completely cleared",
+						"dir", dir,
+						"remaining_size", e.FormatSize(sizeAfter))
 
 					// 尝试再次重置
-					log.Info().Str("dir", dir).Msg("Attempting second cleanup pass")
+					logInfo("Attempting second cleanup pass", "dir", dir)
 					if err := e.clearDirectoryContents(dir); err != nil {
-						log.Error().Str("dir", dir).Err(err).Msg("Failed second cleanup attempt")
+						logError("Failed second cleanup attempt", "dir", dir, "error", err)
 					} else {
 						finalSize := e.GetDirectorySize(dir)
 						if finalSize < sizeAfter {
-							log.Info().
-								Str("dir", dir).
-								Str("before", e.FormatSize(sizeAfter)).
-								Str("after", e.FormatSize(finalSize)).
-								Msg("Second cleanup pass improved results")
+							logInfo("Second cleanup pass improved results",
+								"dir", dir,
+								"before", e.FormatSize(sizeAfter),
+								"after", e.FormatSize(finalSize))
 						}
 					}
 				}
@@ -1434,23 +1538,21 @@ func (e *Engine) cleanCache(appPath, appName string) error {
 
 	for dirName, stat := range stats {
 		if stat.DirCount > 0 {
-			log.Info().
-				Str("directory_type", dirName).
-				Int("directories", stat.DirCount).
-				Int("cleaned", stat.CleanedDirs).
-				Str("size_freed", e.FormatSize(stat.TotalSize)).
-				Msgf("Cache stats: %s", dirName)
+			logInfo(fmt.Sprintf("Cache stats: %s", dirName),
+				"directory_type", dirName,
+				"directories", stat.DirCount,
+				"cleaned", stat.CleanedDirs,
+				"size_freed", e.FormatSize(stat.TotalSize))
 
 			totalSize += stat.TotalSize
 			totalCleanedDirs += stat.CleanedDirs
 		}
 	}
 
-	log.Info().
-		Str("app", appName).
-		Int("directories_cleaned", totalCleanedDirs).
-		Str("total_size_freed", e.FormatSize(totalSize)).
-		Msg("Total cache cleaning results")
+	logInfo("Total cache cleaning results",
+		"app", appName,
+		"directories_cleaned", totalCleanedDirs,
+		"total_size_freed", e.FormatSize(totalSize))
 
 	// 发送最终的完成进度
 	e.sendProgress(ProgressUpdate{
@@ -1469,8 +1571,11 @@ func (e *Engine) cleanCache(appPath, appName string) error {
 
 // clearDirectoryContents clears all contents of a directory
 func (e *Engine) clearDirectoryContents(directory string) error {
+	logDebug("开始清空目录内容", "directory", directory)
+
 	entries, err := os.ReadDir(directory)
 	if err != nil {
+		logError("读取目录失败", "directory", directory, "error", err)
 		return fmt.Errorf("failed to read directory %s: %w", directory, err)
 	}
 
@@ -1483,10 +1588,10 @@ func (e *Engine) clearDirectoryContents(directory string) error {
 		// 尝试获取文件信息，但如果失败也继续处理
 		info, err := entry.Info()
 		if err != nil {
-			log.Debug().Str("path", path).Err(err).Msg("Failed to get file info, will try to remove anyway")
+			logDebug("Failed to get file info, will try to remove anyway", "path", path, "error", err)
 			// 即使获取信息失败，也尝试删除
 			if err := os.RemoveAll(path); err != nil {
-				log.Warn().Str("path", path).Err(err).Msg("Failed to remove item")
+				logWarn("Failed to remove item", "path", path, "error", err)
 				failedItems = append(failedItems, path)
 			}
 			continue
@@ -1495,7 +1600,7 @@ func (e *Engine) clearDirectoryContents(directory string) error {
 		// 处理符号链接
 		if info.Mode()&os.ModeSymlink != 0 {
 			if err := os.Remove(path); err != nil {
-				log.Warn().Str("path", path).Err(err).Msg("Failed to remove symlink")
+				logWarn("Failed to remove symlink", "path", path, "error", err)
 				failedItems = append(failedItems, path)
 			} else {
 				removedFiles++
@@ -1510,16 +1615,15 @@ func (e *Engine) clearDirectoryContents(directory string) error {
 			if err == nil && len(subEntries) > 0 {
 				// 如果目录不为空，先递归清空
 				if subErr := e.clearDirectoryContents(path); subErr != nil {
-					log.Debug().
-						Str("path", path).
-						Err(subErr).
-						Msg("Failed to clear subdirectory contents, will try to remove entire directory")
+					logDebug("Failed to clear subdirectory contents, will try to remove entire directory",
+						"path", path,
+						"error", subErr)
 				}
 			}
 
 			// 无论上面的递归清空是否成功，都尝试删除整个目录
 			if err := os.RemoveAll(path); err != nil {
-				log.Warn().Str("path", path).Err(err).Msg("Failed to remove directory")
+				logWarn("Failed to remove directory", "path", path, "error", err)
 				failedItems = append(failedItems, path)
 			} else {
 				removedDirs++
@@ -1530,7 +1634,7 @@ func (e *Engine) clearDirectoryContents(directory string) error {
 				// 如果普通删除失败，尝试更改权限后再删除
 				os.Chmod(path, 0666) // 尝试更改权限
 				if err := os.Remove(path); err != nil {
-					log.Warn().Str("path", path).Err(err).Msg("Failed to remove file even after chmod")
+					logWarn("Failed to remove file even after chmod", "path", path, "error", err)
 					failedItems = append(failedItems, path)
 				} else {
 					removedFiles++
@@ -1541,20 +1645,18 @@ func (e *Engine) clearDirectoryContents(directory string) error {
 		}
 	}
 
-	log.Debug().
-		Str("dir", directory).
-		Int("removed_files", removedFiles).
-		Int("removed_dirs", removedDirs).
-		Int("failed_items", len(failedItems)).
-		Msg("Directory cleaning results")
+	logDebug("目录清理结果",
+		"dir", directory,
+		"removed_files", removedFiles,
+		"removed_dirs", removedDirs,
+		"failed_items", len(failedItems))
 
 	// 即使有失败项，也返回成功，以便继续处理其他目录
 	if len(failedItems) > 0 {
-		log.Warn().
-			Str("directory", directory).
-			Int("failed_count", len(failedItems)).
-			Strs("first_few", failedItems[:min(3, len(failedItems))]).
-			Msg("Some items could not be removed")
+		logWarn("部分项目无法删除",
+			"directory", directory,
+			"failed_count", len(failedItems),
+			"first_few", strings.Join(failedItems[:min(3, len(failedItems))], ", "))
 	}
 
 	return nil
@@ -1617,12 +1719,12 @@ func (e *Engine) findFilesRecursive(root string, filenames []string) []string {
 func (e *Engine) findDirectoriesRecursive(root string, dirNames []string) []string {
 	var found []string
 
-	log.Debug().Str("root", root).Strs("targets", dirNames).Msg("Searching for directories")
+	logDebug("Searching for directories", "root", root, "targets", dirNames)
 
 	// 使用更强大的递归方法
 	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			log.Debug().Str("path", path).Err(err).Msg("Error accessing path")
+			logDebug("Error accessing path", "path", path, "error", err)
 			return nil // 跳过错误，继续搜索
 		}
 
@@ -1649,14 +1751,14 @@ func (e *Engine) findDirectoriesRecursive(root string, dirNames []string) []stri
 
 					// 如果父��录名称匹配第一部分，或者路径中包含第一部分
 					if parentName == parts[0] || strings.Contains(path, parts[0]) {
-						log.Debug().Str("path", path).Str("dirName", dirName).Str("baseName", baseName).Str("parentName", parentName).Msg("Found matching directory with parent path")
+						logDebug("Found matching directory with parent path", "path", path, "dirName", dirName, "baseName", baseName, "parentName", parentName)
 						found = append(found, path)
 						break
 					}
 				}
 			} else if baseName == dirName {
 				// 直接匹配目录名
-				log.Debug().Str("path", path).Str("dirName", dirName).Msg("Found matching directory")
+				logDebug("Found matching directory", "path", path, "dirName", dirName)
 				found = append(found, path)
 				break
 			}
@@ -1665,13 +1767,13 @@ func (e *Engine) findDirectoriesRecursive(root string, dirNames []string) []stri
 		return nil
 	})
 
-	log.Debug().Int("count", len(found)).Strs("dirs", found).Msg("Directory search results")
+	logDebug("Directory search results", "count", len(found), "dirs", found)
 	return found
 }
 
 // findFilesRecursiveAdvanced 高级递归查找文件的函数
 func (e *Engine) findFilesRecursiveAdvanced(root string, filenames []string) []string {
-	log.Debug().Str("root", root).Strs("targets", filenames).Msg("Starting recursive file search")
+	logDebug("Starting recursive file search", "root", root, "targets", filenames)
 
 	var found []string
 	var totalFiles int
@@ -1685,7 +1787,7 @@ func (e *Engine) findFilesRecursiveAdvanced(root string, filenames []string) []s
 	// 使用filepath.Walk递归查找所有文件
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			log.Debug().Str("path", path).Err(err).Msg("Error accessing path")
+			logDebug("Error accessing path", "path", path, "error", err)
 			return nil // 继续处理其他路径
 		}
 
@@ -1697,7 +1799,7 @@ func (e *Engine) findFilesRecursiveAdvanced(root string, filenames []string) []s
 
 			// 尝试直接匹配
 			if filenameMap[strings.ToLower(baseName)] {
-				log.Debug().Str("path", path).Msg("Found matching file")
+				logDebug("Found matching file", "path", path)
 				found = append(found, path)
 			}
 		}
@@ -1706,17 +1808,17 @@ func (e *Engine) findFilesRecursiveAdvanced(root string, filenames []string) []s
 	})
 
 	if err != nil {
-		log.Error().Err(err).Msg("Error during file recursion")
+		logError("Error during file recursion", "error", err)
 	}
 
-	log.Info().Str("root", root).Int("total_files_scanned", totalFiles).Int("matches_found", len(found)).Msg("File recursion finished")
+	logInfo("File recursion finished", "root", root, "total_files_scanned", totalFiles, "matches_found", len(found))
 
 	return found
 }
 
 // findDatabaseFiles 专门查找数据库文件
 func (e *Engine) findDatabaseFiles(root string) []string {
-	log.Debug().Str("root", root).Msg("Searching for database files")
+	logDebug("Searching for database files", "root", root)
 
 	var found []string
 	var totalFiles int
@@ -1755,7 +1857,7 @@ func (e *Engine) findDatabaseFiles(root string) []string {
 		return nil
 	})
 
-	log.Info().Str("root", root).Int("total_files_scanned", totalFiles).Int("matches_found", len(found)).Msg("Database file search finished")
+	logInfo("Database file search finished", "root", root, "total_files_scanned", totalFiles, "matches_found", len(found))
 
 	return found
 }
@@ -1783,9 +1885,9 @@ func (e *Engine) cleanOldBackups() {
 		if info.ModTime().Before(cutoffTime) {
 			path := filepath.Join(e.backupBaseDir, entry.Name())
 			if err := os.RemoveAll(path); err != nil {
-				log.Warn().Str("path", path).Err(err).Msg("Failed to remove old backup")
+				logWarn("Failed to remove old backup", "path", path, "error", err)
 			} else {
-				log.Info().Str("path", path).Msg("Removed old backup")
+				logInfo("Removed old backup", "path", path)
 			}
 		}
 	}
@@ -1869,7 +1971,7 @@ func (e *Engine) DiscoverCacheInfo(appPath, appName string) map[string]int64 {
 
 		if len(foundDirs) > 0 {
 			cacheInfo[dirName] = totalSize
-			log.Info().Str("dirName", dirName).Int("count", len(foundDirs)).Str("size", e.FormatSize(totalSize)).Msg("Cache info")
+			logInfo("Cache info", "dirName", dirName, "count", len(foundDirs), "size", e.FormatSize(totalSize))
 		}
 	}
 
@@ -1940,27 +2042,27 @@ func (e *Engine) TestSQLiteConnection(dbPath string) error {
 	}
 
 	for _, connStr := range connectionStrings {
-		log.Debug().Str("connection", connStr).Msg("Trying connection string")
+		logDebug("Trying connection string", "connection", connStr)
 
 		db, err := sql.Open("sqlite", connStr)
 		if err != nil {
-			log.Error().Str("connection", connStr).Err(err).Msg("Failed to open database")
+			logError("Failed to open database", "connection", connStr, "error", err)
 			continue
 		}
 		defer db.Close()
 
 		// 测试连接
 		if err := db.Ping(); err != nil {
-			log.Error().Str("connection", connStr).Err(err).Msg("Failed to ping database")
+			logError("Failed to ping database", "connection", connStr, "error", err)
 			continue
 		}
 
-		log.Info().Str("connection", connStr).Msg("Successfully connected to database")
+		logInfo("Successfully connected to database", "connection", connStr)
 
 		// 列出所有表
 		rows, err := db.Query("SELECT name FROM sqlite_master WHERE type='table'")
 		if err != nil {
-			log.Error().Err(err).Msg("Failed to list tables")
+			logError("Failed to list tables", "error", err)
 			continue
 		}
 
@@ -1968,22 +2070,22 @@ func (e *Engine) TestSQLiteConnection(dbPath string) error {
 		for rows.Next() {
 			var tableName string
 			if err := rows.Scan(&tableName); err != nil {
-				log.Error().Err(err).Msg("Failed to scan table name")
+				logError("Failed to scan table name", "error", err)
 				continue
 			}
 			tables = append(tables, tableName)
 		}
 		rows.Close()
 
-		log.Info().Strs("tables", tables).Int("count", len(tables)).Msg("Database tables")
+		logInfo("Database tables", "tables", tables, "count", len(tables))
 
 		// 尝试读取ItemTable表的内容（如果存在）
 		if contains(tables, "ItemTable") {
-			log.Info().Msg("Found ItemTable, trying to read contents")
+			logInfo("Found ItemTable, trying to read contents")
 
 			rows, err := db.Query("SELECT key, value FROM ItemTable LIMIT 10")
 			if err != nil {
-				log.Error().Err(err).Msg("Failed to query ItemTable")
+				logError("Failed to query ItemTable", "error", err)
 				continue
 			}
 
@@ -1991,14 +2093,14 @@ func (e *Engine) TestSQLiteConnection(dbPath string) error {
 			for rows.Next() {
 				var key, value string
 				if err := rows.Scan(&key, &value); err != nil {
-					log.Error().Err(err).Msg("Failed to scan row")
+					logError("Failed to scan row", "error", err)
 					continue
 				}
 				items = append(items, fmt.Sprintf("%s=%s", key, value))
 			}
 			rows.Close()
 
-			log.Info().Strs("items", items).Int("count", len(items)).Msg("ItemTable contents (sample)")
+			logInfo("ItemTable contents (sample)", "items", items, "count", len(items))
 			return nil // 成功找到并读取了ItemTable
 		}
 	}

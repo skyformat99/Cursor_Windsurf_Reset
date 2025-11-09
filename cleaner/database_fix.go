@@ -15,28 +15,28 @@ func (e *Engine) cleanSQLiteDatabaseAdvancedFixed(dbPath string, keywords []stri
 	for _, connStr := range connectionStrings {
 		db, err := sql.Open("sqlite", connStr)
 		if err != nil {
-			log.Debug().Str("connection", connStr).Err(err).Msg("尝试连接数据库失败")
+			logDebug("尝试连接数据库失败", "connection", connStr, "error", err)
 			continue
 		}
 
 		if err := db.Ping(); err != nil {
 			db.Close()
-			log.Debug().Str("connection", connStr).Err(err).Msg("Ping数据库失败")
+			logDebug("Ping数据库失败", "connection", connStr, "error", err)
 			continue
 		}
 
-		log.Debug().Str("connection", connStr).Msg("成功连接到数据库")
+		logDebug("成功连接到数据库", "connection", connStr)
 
 		tx, err := db.Begin()
 		if err != nil {
 			db.Close()
-			log.Error().Err(err).Msg("开始事务失败")
+			logError("开始事务失败", "error", err)
 			continue
 		}
 
 		tables, err := tx.Query("SELECT name FROM sqlite_master WHERE type='table'")
 		if err != nil {
-			log.Error().Err(err).Msg("获取表列表失败")
+			logError("获取表列表失败", "error", err)
 			tx.Rollback()
 			db.Close()
 			continue
@@ -46,7 +46,7 @@ func (e *Engine) cleanSQLiteDatabaseAdvancedFixed(dbPath string, keywords []stri
 		for tables.Next() {
 			var tableName string
 			if err := tables.Scan(&tableName); err != nil {
-				log.Warn().Err(err).Msg("读取表名失败")
+				logWarn("读取表名失败", "error", err)
 				continue
 			}
 			if !hasPrefix(tableName, "sqlite_") {
@@ -56,7 +56,7 @@ func (e *Engine) cleanSQLiteDatabaseAdvancedFixed(dbPath string, keywords []stri
 		tables.Close()
 
 		if len(tableNames) == 0 {
-			log.Warn().Str("path", dbPath).Msg("数据库中没有找到用户表")
+			logWarn("数据库中没有找到用户表", "path", dbPath)
 			tx.Rollback()
 			db.Close()
 			return false, 0, true
@@ -68,16 +68,16 @@ func (e *Engine) cleanSQLiteDatabaseAdvancedFixed(dbPath string, keywords []stri
 		_ = cleanedRecords
 
 		if err := tx.Commit(); err != nil {
-			log.Error().Err(err).Msg("提交事务失败")
+			logError("提交事务失败", "error", err)
 			tx.Rollback()
 			db.Close()
 			return false, 0, false
 		}
 
 		if cleanedRecords > 0 {
-			log.Info().Str("path", dbPath).Msg("优化数据库")
+			logInfo("优化数据库", "path", dbPath)
 			if _, err := db.Exec("VACUUM"); err != nil {
-				log.Warn().Err(err).Msg("执行VACUUM失败")
+				logWarn("执行VACUUM失败", "error", err)
 			}
 		}
 		db.Close()

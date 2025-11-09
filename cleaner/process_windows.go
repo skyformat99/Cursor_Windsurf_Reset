@@ -42,90 +42,89 @@ func (e *Engine) cleanRegistry(appName string) error {
 	for _, regConfig := range app.RegKeys {
 		rootKey, subKeyPath, err := parseRegistryPath(regConfig.Path)
 		if err != nil {
-			log.Error().Err(err).Str("path", regConfig.Path).Msg("Failed to parse registry path")
+			logError("Failed to parse registry path", "path", regConfig.Path, "error", err)
 			failedKeys++
 			continue
 		}
 
 		if len(regConfig.WildcardSubKeys) > 0 {
 			for _, pattern := range regConfig.WildcardSubKeys {
-				matches, err := findMatchingRegistryKeys(rootKey, subKeyPath, pattern)
-				if err != nil {
-					log.Error().Err(err).
-						Str("path", regConfig.Path).
-						Str("pattern", pattern).
-						Msg("Failed to find matching registry keys")
-					failedKeys++
-					continue
-				}
+					matches, err := findMatchingRegistryKeys(rootKey, subKeyPath, pattern)
+					if err != nil {
+						logError("Failed to find matching registry keys",
+							"path", regConfig.Path,
+							"pattern", pattern,
+							"error", err)
+						failedKeys++
+						continue
+					}
 
-				for _, match := range matches {
+					for _, match := range matches {
 					totalKeys++
 					fullPath := subKeyPath + "\\" + match
-					if err := registry.DeleteKey(rootKey, fullPath); err != nil {
-						if err != registry.ErrNotExist {
-							log.Error().Err(err).
-								Str("path", fullPath).
-								Msg("Failed to delete matching registry key")
-							failedKeys++
+						if err := registry.DeleteKey(rootKey, fullPath); err != nil {
+							if err != registry.ErrNotExist {
+								logError("Failed to delete matching registry key",
+									"path", fullPath,
+									"pattern", pattern,
+									"error", err)
+								failedKeys++
+							}
+						} else {
+							deletedPaths++
+							cleanedKeys++
+							logInfo("Successfully deleted matching registry key",
+								"path", fullPath,
+								"pattern", pattern)
 						}
-					} else {
-						deletedPaths++
-						cleanedKeys++
-						log.Info().
-							Str("path", fullPath).
-							Str("pattern", pattern).
-							Msg("Successfully deleted matching registry key")
 					}
 				}
+				continue
 			}
-			continue
-		}
 
 		// 打开注册表键
-		key, err := registry.OpenKey(rootKey, subKeyPath, registry.ALL_ACCESS)
-		if err != nil {
-			if err != registry.ErrNotExist {
-				log.Error().Err(err).Str("path", regConfig.Path).Msg("Failed to open registry key")
-				failedKeys++
-			}
-			continue
-		}
-
-		if regConfig.FullClean {
-			err = registry.DeleteKey(rootKey, subKeyPath)
-			if err != nil {
-				log.Error().Err(err).Str("path", regConfig.Path).Msg("Failed to delete registry key")
-				failedKeys++
-			} else {
-				deletedPaths++
-				totalKeys++
-				cleanedKeys++
-				log.Info().Str("path", regConfig.Path).Msg("Successfully deleted registry key")
-			}
-			key.Close()
-			continue
-		}
-
-		for _, valueName := range regConfig.Keys {
-			totalKeys++
-			err = key.DeleteValue(valueName)
+			key, err := registry.OpenKey(rootKey, subKeyPath, registry.ALL_ACCESS)
 			if err != nil {
 				if err != registry.ErrNotExist {
-					log.Error().Err(err).
-						Str("path", regConfig.Path).
-						Str("value", valueName).
-						Msg("Failed to delete registry value")
+					logError("Failed to open registry key", "path", regConfig.Path, "error", err)
 					failedKeys++
 				}
-			} else {
-				cleanedKeys++
-				log.Info().
-					Str("path", regConfig.Path).
-					Str("value", valueName).
-					Msg("Successfully deleted registry value")
+				continue
 			}
-		}
+
+			if regConfig.FullClean {
+				err = registry.DeleteKey(rootKey, subKeyPath)
+				if err != nil {
+					logError("Failed to delete registry key", "path", regConfig.Path, "error", err)
+					failedKeys++
+				} else {
+					deletedPaths++
+					totalKeys++
+					cleanedKeys++
+					logInfo("Successfully deleted registry key", "path", regConfig.Path)
+				}
+				key.Close()
+				continue
+			}
+
+			for _, valueName := range regConfig.Keys {
+				totalKeys++
+				err = key.DeleteValue(valueName)
+				if err != nil {
+					if err != registry.ErrNotExist {
+						logError("Failed to delete registry value",
+							"path", regConfig.Path,
+							"value", valueName,
+							"error", err)
+						failedKeys++
+					}
+				} else {
+					cleanedKeys++
+					logInfo("Successfully deleted registry value",
+						"path", regConfig.Path,
+						"value", valueName)
+				}
+			}
 
 		key.Close()
 	}
@@ -183,15 +182,12 @@ func (e *Engine) isProcessRunning(processName string) bool {
 	if err != nil {
 		// 超时或其他错误
 		if ctx.Err() == context.DeadlineExceeded {
-			log.Warn().
-				Str("process", processName).
-				Msg("Process check timed out, assuming process is not running")
+			logWarn("Process check timed out, assuming process is not running", "process", processName)
 			return false
 		}
-		log.Debug().
-			Str("process", processName).
-			Err(err).
-			Msg("Failed to check process, assuming process is not running")
+		logDebug("Failed to check process, assuming process is not running",
+			"process", processName,
+			"error", err)
 		return false
 	}
 
